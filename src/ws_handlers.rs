@@ -1,5 +1,9 @@
 // src/ws_handlers.rs
-
+#[derive(Serialize)]
+pub struct UserDTO {
+    pub id: Uuid,
+    pub username: String,
+}
 use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
