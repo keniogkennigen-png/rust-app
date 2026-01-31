@@ -2,6 +2,7 @@
 name = "rust_chat"  # <--- CHANGED from "rust_whatsapp_equivalent"
 version = "0.1.0"
 edition = "2021"
+
 [dependencies]
 warp = "0.3.7"
 tokio = { version = "1", features = ["full"] }
