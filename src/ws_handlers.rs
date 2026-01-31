@@ -8,9 +8,9 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 use warp::{
-    http::StatusCode,
     ws::{Message, WebSocket},
     Rejection, Reply,
+    http::StatusCode,
 };
 use bcrypt;
 use warp::reject::Reject;
@@ -23,14 +23,14 @@ pub struct AppState {
     pub active_connections: Mutex<HashMap<String, mpsc::UnboundedSender<Message>>>,
 }
 
-/// Simplified user data for JSON responses (No Mutexes here!)
+/// DTO for sending user info (Uses String for ID to avoid serialization issues)
 #[derive(Serialize, Clone, Debug)]
 pub struct UserDTO {
-    pub id: Uuid,
+    pub id: String,
     pub username: String,
 }
 
-/// Internal User struct (Removed Serialize to fix Mutex errors)
+/// Internal User struct (No Serialize here!)
 #[derive(Debug, Clone)]
 pub struct User {
     pub id: Uuid,
@@ -39,7 +39,8 @@ pub struct User {
     pub contacts: Arc<Mutex<HashMap<Uuid, String>>>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+/// Active session (No Serialize here either!)
+#[derive(Clone, Debug)]
 pub struct UserSession {
     pub user_id: Uuid,
     pub username: String,
@@ -50,33 +51,32 @@ pub struct UserSession {
 pub struct ErrorResponse {
     pub message: String,
 }
-
 impl Reject for ErrorResponse {}
 
-// --- WebSocket Message Structures ---
+// --- WebSocket Messages (Using String for IDs) ---
 
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum ClientMessage {
-    ChatMessage { to_user_id: Uuid, message: String },
-    TypingIndicator { to_user_id: Uuid, is_typing: bool },
-    ReadReceipt { to_user_id: Uuid, message_id: String },
+    ChatMessage { to_user_id: String, message: String },
+    TypingIndicator { to_user_id: String, is_typing: bool },
+    ReadReceipt { to_user_id: String, message_id: String },
 }
 
 #[derive(Serialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum ServerMessage {
     ChatMessage {
-        from_user_id: Uuid,
+        from_user_id: String,
         from_username: String,
-        to_user_id: Uuid,
+        to_user_id: String,
         message_id: String,
         timestamp: String,
         message: String,
     },
-    StatusMessage { user_id: Uuid, username: String, status: String },
-    ReadReceipt { from_user_id: Uuid, message_id: String },
-    TypingIndicator { from_user_id: Uuid, is_typing: bool },
+    StatusMessage { user_id: String, username: String, status: String },
+    ReadReceipt { from_user_id: String, message_id: String },
+    TypingIndicator { from_user_id: String, is_typing: bool },
 }
 
 // --- WebSocket Logic ---
@@ -98,6 +98,8 @@ pub async fn handle_ws(ws: WebSocket, session: UserSession, app_state: Arc<AppSt
         if let Ok(text) = msg.to_str() {
             if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(text) {
                 handle_client_message(client_msg, &session, &app_state).await;
+            } else {
+                eprintln!("Failed to parse message: {}", text);
             }
         }
     }
@@ -112,31 +114,68 @@ async fn handle_client_message(msg: ClientMessage, sender_session: &UserSession,
 
     match msg {
         ClientMessage::ChatMessage { to_user_id, message } => {
-            let server_msg = ServerMessage::ChatMessage {
-                from_user_id: sender_session.user_id,
-                from_username: sender_session.username.clone(),
-                to_user_id,
-                message_id: Uuid::new_v4().to_string(),
-                timestamp: Utc::now().to_rfc3339(),
-                message,
-            };
-            if let Ok(json) = serde_json::to_string(&server_msg) {
-                for (session_key, tx) in connections_lock.iter() {
-                    if let Some(target_session) = user_sessions_lock.get(session_key) {
-                        if target_session.user_id == to_user_id || target_session.user_id == sender_session.user_id {
-                             let _ = tx.send(Message::text(json.clone()));
+            // Parse the string ID back to Uuid
+            if let Ok(target_uuid) = Uuid::parse_str(&to_user_id) {
+                let server_msg = ServerMessage::ChatMessage {
+                    from_user_id: sender_session.user_id.to_string(),
+                    from_username: sender_session.username.clone(),
+                    to_user_id: to_user_id.clone(),
+                    message_id: Uuid::new_v4().to_string(),
+                    timestamp: Utc::now().to_rfc3339(),
+                    message,
+                };
+                if let Ok(json) = serde_json::to_string(&server_msg) {
+                    for (session_key, tx) in connections_lock.iter() {
+                        if let Some(target_session) = user_sessions_lock.get(session_key) {
+                            // Check match against the parsed UUID
+                            if target_session.user_id == target_uuid || target_session.user_id == sender_session.user_id {
+                                 let _ = tx.send(Message::text(json.clone()));
+                            }
                         }
                     }
                 }
             }
         }
-        _ => { /* Handle other cases similarly */ }
+        ClientMessage::TypingIndicator { to_user_id, is_typing } => {
+            if let Ok(target_uuid) = Uuid::parse_str(&to_user_id) {
+                let server_msg = ServerMessage::TypingIndicator { 
+                    from_user_id: sender_session.user_id.to_string(), 
+                    is_typing 
+                };
+                if let Ok(json) = serde_json::to_string(&server_msg) {
+                    for (session_key, tx) in connections_lock.iter() {
+                        if let Some(target_session) = user_sessions_lock.get(session_key) {
+                            if target_session.user_id == target_uuid {
+                                 let _ = tx.send(Message::text(json.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ClientMessage::ReadReceipt { to_user_id, message_id } => {
+            if let Ok(target_uuid) = Uuid::parse_str(&to_user_id) {
+                let server_msg = ServerMessage::ReadReceipt { 
+                    from_user_id: sender_session.user_id.to_string(), 
+                    message_id 
+                };
+                if let Ok(json) = serde_json::to_string(&server_msg) {
+                    for (session_key, tx) in connections_lock.iter() {
+                        if let Some(target_session) = user_sessions_lock.get(session_key) {
+                            if target_session.user_id == target_uuid {
+                                 let _ = tx.send(Message::text(json.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
 async fn broadcast_status(app_state: &Arc<AppState>, session: &UserSession, status: &str) {
     let status_msg = ServerMessage::StatusMessage {
-        user_id: session.user_id,
+        user_id: session.user_id.to_string(),
         username: session.username.clone(),
         status: status.to_string(),
     };
@@ -151,34 +190,39 @@ async fn broadcast_status(app_state: &Arc<AppState>, session: &UserSession, stat
     }
 }
 
-// --- HTTP Auth Handlers ---
+// --- HTTP Handlers ---
 
 #[derive(Deserialize)]
-pub struct AuthPayload { pub username: String, pub password: String }
+pub struct AuthPayload { username: String, password: String }
 
 #[derive(Deserialize)]
-pub struct AddContactPayload { pub contact_username: String }
+pub struct AddContactPayload { contact_username: String }
 
 #[derive(Serialize)]
 pub struct AuthResponse {
     pub message: String,
     pub session_key: String,
-    pub user_id: Uuid,
+    pub user_id: String, // String here too!
     pub username: String,
 }
 
 pub async fn register_handler(payload: AuthPayload, app_state: Arc<AppState>) -> Result<impl Reply, Rejection> {
+    if payload.username.is_empty() || payload.password.is_empty() {
+        return Err(warp::reject::custom(ErrorResponse { message: "Required fields missing.".into() }));
+    }
     let mut users = app_state.users.lock().await;
     if users.contains_key(&payload.username) {
-        return Err(warp::reject::custom(ErrorResponse { message: "User exists".into() }));
+        return Err(warp::reject::custom(ErrorResponse { message: "User exists.".into() }));
     }
-    let password_hash = bcrypt::hash(&payload.password, 10).unwrap();
+    let password_hash = bcrypt::hash(&payload.password, bcrypt::DEFAULT_COST).map_err(|_| warp::reject::custom(ErrorResponse { message: "Hash error.".into() }))?;
+
     let user = User {
         id: Uuid::new_v4(),
         username: payload.username.clone(),
         password_hash,
         contacts: Arc::new(Mutex::new(HashMap::new())),
     };
+    
     let response = create_session(&user, app_state.clone()).await;
     users.insert(payload.username, user);
     Ok(warp::reply::json(&response))
@@ -192,25 +236,39 @@ pub async fn login_handler(payload: AuthPayload, app_state: Arc<AppState>) -> Re
             return Ok(warp::reply::json(&response));
         }
     }
-    Err(warp::reject::custom(ErrorResponse { message: "Invalid credentials".into() }))
+    Err(warp::reject::custom(ErrorResponse { message: "Invalid credentials.".into() }))
 }
 
 async fn create_session(user: &User, app_state: Arc<AppState>) -> AuthResponse {
     let new_session_key = Uuid::new_v4().to_string();
-    app_state.user_sessions.lock().await.insert(new_session_key.clone(), UserSession {
+    let mut sessions = app_state.user_sessions.lock().await;
+    let mut connections = app_state.active_connections.lock().await;
+
+    // Remove old sessions
+    let to_remove: Vec<_> = sessions.iter().filter(|(_, s)| s.user_id == user.id).map(|(k, _)| k.clone()).collect();
+    for key in to_remove {
+        sessions.remove(&key);
+        connections.remove(&key);
+    }
+
+    sessions.insert(new_session_key.clone(), UserSession {
         user_id: user.id,
         username: user.username.clone(),
         session_key: new_session_key.clone(),
     });
+
     AuthResponse {
         message: "Success".into(),
         session_key: new_session_key,
-        user_id: user.id,
+        user_id: user.id.to_string(), // Convert to String
         username: user.username.clone(),
     }
 }
 
 pub async fn add_contact_handler(payload: AddContactPayload, session: UserSession, app_state: Arc<AppState>) -> Result<impl Reply, Rejection> {
+    if payload.contact_username == session.username {
+        return Err(warp::reject::custom(ErrorResponse { message: "Cannot add self.".into() }));
+    }
     let users = app_state.users.lock().await;
     let current_user = users.get(&session.username).cloned();
     let contact_user = users.get(&payload.contact_username).cloned();
@@ -221,7 +279,7 @@ pub async fn add_contact_handler(payload: AddContactPayload, session: UserSessio
         c.contacts.lock().await.insert(u.id, u.username.clone());
         Ok(StatusCode::OK)
     } else {
-        Err(warp::reject::custom(ErrorResponse { message: "User not found".into() }))
+        Err(warp::reject::custom(ErrorResponse { message: "User not found.".into() }))
     }
 }
 
@@ -229,11 +287,12 @@ pub async fn get_contacts_handler(session: UserSession, app_state: Arc<AppState>
     let users = app_state.users.lock().await;
     if let Some(user) = users.get(&session.username) {
         let contacts_map = user.contacts.lock().await;
+        // Convert to String IDs for DTO
         let contacts_list: Vec<UserDTO> = contacts_map.iter()
-            .map(|(id, name)| UserDTO { id: *id, username: name.clone() })
+            .map(|(id, name)| UserDTO { id: id.to_string(), username: name.clone() })
             .collect();
         Ok(warp::reply::json(&contacts_list))
     } else {
-        Err(warp::reject::custom(ErrorResponse { message: "User not found".into() }))
+        Err(warp::reject::custom(ErrorResponse { message: "Not found.".into() }))
     }
 }
