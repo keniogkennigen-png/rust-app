@@ -40,5 +40,17 @@ EXPOSE 3030
 ENV PORT=3030
 ENV HOST=0.0.0.0
 
-# Command to run the executable
+# ... (after your builder stage)
+FROM debian:bookworm-slim
+WORKDIR /app
+
+# Install SSL for bcrypt/warp
+RUN apt-get update && apt-get install -y libssl3 && rm -rf /var/lib/apt/lists/*
+
+# Copy the binary we built
+COPY --from=builder /app/target/release/rust_chat /usr/local/bin/rust_chat
+
+# COPY THE STATIC FILES - THIS IS WHAT FIXES THE 404
+COPY static /app/static
+
 CMD ["rust_chat"]
