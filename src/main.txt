@@ -148,9 +148,6 @@ async fn main() {
         .or(contacts_get_route)
         .with(warp::log("rust_chat"))
         .recover(handle_rejection);
-// Delete or comment this:
-// warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
 
-// Keep or add this (use 0.0.0.0):
-warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
+    warp::serve(routes).run(([192, 168, 0, 178], 3030)).await;
 }
