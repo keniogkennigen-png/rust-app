@@ -1,0 +1,57 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+      
+      - name: Build Release
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --locked
+      
+      - name: Deploy to Railway
+        uses: railwayhq/deploy-action@v1
+        with:
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
+          service: rust-chat
+          environment: production
+          args: --detach
+        continue-on-error: true
+      
+      - name: Deploy to Render (Fallback)
+        if: failure()
+        uses: render-compute/deploy-action@v1
+        with:
+          render_api_key: ${{ secrets.RENDER_API_KEY }}
+          service_id: ${{ secrets.RENDER_SERVICE_ID }}
+        continue-on-error: true
+
+  notify:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Discord Notification
+        if: always()
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook_id: ${{ secrets.DISCORD_WEBHOOK_ID }}
+          webhook_token: ${{ secrets.DISCORD_WEBHOOK_TOKEN }}
+          status: ${{ job.status }}
+          title: RustChat Deployment
+          description: Deployment finished with status ${{ job.status }}
+          color: ${{ job.status == 'success' && '00FF00' || 'FF0000' }}

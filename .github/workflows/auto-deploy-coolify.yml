@@ -1,0 +1,37 @@
+name: Auto Deploy to Coolify
+
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '0 */4 * * *'  # Auto deploy every 4 hours
+
+jobs:
+  deploy-to-coolify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Build Docker Image
+        run: |
+          docker build -t rust-chat:${{ github.sha }} .
+          docker tag rust-chat:${{ github.sha }} rust-chat:latest
+      
+      - name: Deploy to Coolify
+        uses: andreak/codespaces-coolify-action@v1
+        with:
+          coolify_url: ${{ secrets.COOLIFY_URL }}
+          coolify_token: ${{ secrets.COOLIFY_TOKEN }}
+          app_uuid: ${{ secrets.COOLIFY_APP_UUID }}
+          image: rust-chat:${{ github.sha }}
+        continue-on-error: true
+      
+      - name: Report Status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deployment initiated successfully"
+          else
+            echo "❌ Deployment failed, check Coolify dashboard"
+          fi
