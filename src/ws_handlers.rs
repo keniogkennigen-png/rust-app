@@ -29,7 +29,7 @@ pub struct AppState {
 }
 
 /// Represents a registered user in the system.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct User {
     pub id: Uuid,
     pub username: String,
