@@ -66,49 +66,28 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
 
 #[tokio::main]
 async fn main() {
-    // Initialize shared application state
     let app_state = Arc::new(AppState {
         users: Mutex::new(HashMap::new()),
         user_sessions: Mutex::new(HashMap::new()),
         active_connections: Mutex::new(HashMap::new()),
     });
 
-    println!("Starting chat server on 0.0.0.0:3030");
+    // --- ROUTES (Keep your existing route definitions here) ---
+    // ... (Your login_route, register_route, etc.)
 
-    // Serve static files from the 'static' directory.
-    // warp::fs::dir will automatically serve 'index.html' if present at the root path '/'.
-    let static_files = warp::fs::dir("static");
+    // --- DYNAMIC PORT LOGIC ---
+    let port_key = "PORT";
+    let port: u16 = std::env::var(port_key)
+        .unwrap_or_else(|_| "3030".to_string())
+        .parse()
+        .expect("PORT must be a number");
 
-    // WebSocket route
-    let chat_route = warp::path("ws")
-        .and(warp::ws())
-        // NEW: Extract query parameters instead of a header for the WebSocket token
-        .and(warp::query::<HashMap<String, String>>())
-        .and(with_app_state(app_state.clone()))
-        .map(|ws: ws::Ws, query_params: HashMap<String, String>, app_state_filter: Arc<AppState>| {
-            ws.on_upgrade(move |socket| async move {
-                let session_key = query_params.get("token").cloned(); // Get the token from query params
-
-                // Acquire the lock for user_sessions once outside the conditional branches
-                let sessions_guard = app_state_filter.user_sessions.lock().await;
-
-                if let Some(token) = session_key {
-                    if let Some(session) = sessions_guard.get(&token).cloned() {
-                        // Drop the guard before calling handle_ws if handle_ws needs to acquire the same lock.
-                        // However, handle_ws uses `app_state_filter` directly, so it will acquire its own locks.
-                        // So dropping it here explicitly for clarity, though it would drop at end of scope.
-                        drop(sessions_guard);
-                        ws_handlers::handle_ws(socket, session, app_state_filter).await;
-                    } else {
-                        eprintln!("WebSocket connection denied: Invalid session key from query param.");
-                        // In a real app, you might close the socket directly or send an error message
-                        // For now, we just don't upgrade it, so the connection will eventually time out.
-                    }
-                } else {
-                    eprintln!("WebSocket connection denied: No token provided in query param.");
-                }
-            })
-        });
+    println!("Starting chat server on 0.0.0.0:{}", port);
+    
+    warp::serve(routes)
+        .run(([0, 0, 0, 0], port))
+        .await;
+}
 
     // Registration route
     let register_route = warp::path("register")
