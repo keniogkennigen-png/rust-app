@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RustChat Client - Sci-Fi Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-deep-space: #0d0c22;
+            --bg-panel-1: #11102b;
+            --bg-panel-2: #161532;
+            --text-primary: #e0e0e0;
+            --text-secondary: #a0a0c0; /* Original secondary text */
+            --text-placeholder: #a0a0a0; /* Darker grey for placeholder for better contrast */
+            --accent-primary: #00a8ff;
+            --accent-primary-darker: #0086cc;
+            --accent-secondary: #4a4e69;
+            --accent-secondary-darker: #393c52;
+            --status-online: #00ffc3; /* Vibrant green for online status/typing bar */
+            --status-offline: #4a4e69;
+            --border-color: #2a2a4e;
+            --error-color: #ff3d70;
+            --sent-bubble: #0077b6;
+            --received-bubble: #2a2a4e; /* Keep this for received bubbles */
+            --input-background: #1c1b35; /* Explicitly dark background for input fields */
+            --system-message-bg: rgba(43, 122, 120, 0.5);
+            --system-message-text: #a2e8e6;
+        }
+
+        body {
+            font-family: 'Rajdhani', sans-serif;
+            background-color: var(--bg-deep-space);
+            color: var(--text-primary);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .app-container {
+            display: flex;
+            background-color: var(--bg-panel-2);
+            border-radius: 12px;
+            box-shadow: 0 0 30px rgba(0, 168, 255, 0.15);
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+            width: 95%;
+            max-width: 1000px;
+            height: 90vh;
+            min-height: 600px;
+        }
+        .sidebar {
+            width: 320px;
+            background-color: var(--bg-panel-1);
+            border-right: 1px solid var(--border-color);
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+        .main-content {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            background-image: radial-gradient(circle, var(--bg-panel-2) 0%, var(--bg-deep-space) 100%);
+        }
+        .input-field {
+            width: 100%; padding: 0.75rem 1rem; margin-bottom: 0.75rem; border: 1px solid var(--border-color); border-radius: 20px;
+            outline: none; font-size: 1.1rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            background-color: var(--input-background); /* Use the new dark input background variable */
+            color: var(--text-primary); /* Use primary text color for typed text */
+            font-family: 'Rajdhani', sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+        }
+        .input-field::placeholder { color: var(--text-placeholder); } /* Use new placeholder color */
+        .input-field:focus { border-color: var(--accent-primary); box-shadow: 0 0 0 3px rgba(0, 168, 255, 0.3); }
+        .action-button {
+            background-color: var(--accent-primary); color: var(--bg-deep-space); padding: 0.75rem 1.5rem; border: none; border-radius: 20px;
+            cursor: pointer; font-size: 1rem; font-weight: 700; transition: background-color 0.2s, transform 0.1s; width: 100%;
+            text-transform: uppercase; letter-spacing: 1px;
+        }
+        .action-button:hover { background-color: var(--accent-primary-darker); }
+        .action-button:active { transform: scale(0.98); }
+        .action-button.secondary { background-color: var(--accent-secondary); color: var(--text-primary); }
+        .action-button.secondary:hover { background-color: var(--accent-secondary-darker); }
+        .messages {
+            flex-grow: 1; padding: 1.5rem; overflow-y: auto;
+            display: flex; flex-direction: column; scroll-behavior: smooth;
+        }
+        .message-bubble {
+            padding: 0.6rem 1rem; border-radius: 10px; margin-bottom: 0.5rem; max-width: 80%;
+            word-wrap: break-word; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            line-height: 1.5;
+            font-size: 1.05rem;
+            font-family: 'Rajdhani', sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+        }
+        .message-bubble.received { background-color: var(--received-bubble); align-self: flex-start; }
+        .message-bubble.sent { background-color: var(--sent-bubble); align-self: flex-end; color: var(--text-primary); }
+        .message-sender { font-weight: 600; font-size: 0.9rem; margin-bottom: 0.2rem; color: var(--status-online); text-shadow: 0 0 5px var(--status-online); }
+        .system-message { 
+            align-self: center; background-color: var(--system-message-bg); color: var(--system-message-text); font-size: 0.8rem;
+            padding: 0.25rem 0.75rem; border-radius: 10px; margin: 0.5rem 0; border: 1px solid var(--system-message-text);
+        }
+        .input-area {
+            display: flex; flex-wrap: wrap; padding: 1rem; background-color: var(--bg-panel-1); border-top: 1px solid var(--border-color);
+        }
+        /* Specific styling for the messageInput box (the main chat input) */
+        #messageInput {
+            background-color: var(--input-background) !important; /* Force dark background */
+            color: var(--text-primary) !important; /* Force light text */
+        }
+
+        .input-area input[type="text"] { flex-grow: 1; border-radius: 20px; outline: none; margin-right: 0.75rem; }
+        .contacts-list .contact-button {
+            display: flex; align-items: center; justify-content: space-between; width: 100%; text-align: left;
+            padding: 0.75rem 1rem; border-radius: 8px; background-color: transparent; border: 1px solid transparent; cursor: pointer;
+            transition: background-color 0.2s, border-color 0.2s; margin-bottom: 0.5rem; font-size: 1.1rem; color: var(--text-primary); font-weight: 600;
+        }
+        .contacts-list .contact-button:hover { background-color: var(--received-bubble); }
+        .contacts-list .contact-button.active { background-color: var(--accent-primary); color: var(--bg-deep-space); border-color: var(--accent-primary); }
+        .status-indicator { width: 10px; height: 10px; border-radius: 50%; background-color: var(--status-offline); transition: background-color 0.3s, box-shadow 0.3s; }
+        .status-indicator.online { background-color: var(--status-online); box-shadow: 0 0 8px var(--status-online); }
+        .chat-header {
+            position: relative; /* Needed for z-index context */
+            display: flex;
+            align-items: center;
+            background: linear-gradient(90deg, var(--accent-primary) 0%, var(--accent-primary-darker) 100%);
+            color: var(--bg-panel-1); padding: 1rem 1.5rem; font-weight: 700;
+            font-size: 1.2rem; border-top-right-radius: 11px; text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
+            letter-spacing: 0.5px;
+            z-index: 1; /* Ensure header is above other potential overlapping elements */
+        }
+        .message-box {
+            position: fixed; top: 2rem; left: 50%; transform: translateX(-50%); background-color: var(--bg-panel-2); color: var(--text-primary);
+            padding: 1rem 1.5rem; border-radius: 8px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+            z-index: 1000; display: none; border-left: 4px solid var(--accent-primary);
+            font-weight: 600;
+        }
+        .message-box.error { border-left-color: var(--error-color); }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg-panel-1); }
+        ::-webkit-scrollbar-thumb { background: var(--accent-secondary); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--accent-secondary-darker); }
+
+        h2.rustchat-title {
+            color: var(--accent-primary);
+            text-shadow: 0 0 10px var(--accent-primary), 0 0 20px rgba(0, 168, 255, 0.5);
+        }
+
+        /* Emoji Picker Styles */
+        .emoji-picker {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.5rem; /* Space between input and emojis */
+            width: 100%;
+            justify-content: flex-start; /* Align emoji buttons to the left */
+        }
+        .emoji-picker button {
+            background-color: var(--accent-secondary);
+            color: var(--text-primary);
+            border: none;
+            border-radius: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            font-size: 1.25rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            line-height: 1; /* Adjust line height for better emoji centering */
+            height: 40px; /* Fixed height for consistent button size */
+            width: 40px; /* Fixed width for consistent button size */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            /* Ensure emojis within buttons render correctly */
+            font-family: sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+        }
+        .emoji-picker button:hover {
+            background-color: var(--accent-secondary-darker);
+        }
+
+        /* Typing Indicator Bar Animation */
+        .typing-indicator-container {
+            display: flex;
+            align-items: center;
+            margin-left: 0.75rem;
+            font-size: 0.9em;
+            color: var(--text-primary); /* Text color for indicator, now visible */
+            min-width: 80px;
+            z-index: 10;
+            position: relative;
+            /* No 'hidden' class here anymore - it will always be flex */
+        }
+
+        /* Initially hide the contents (text and bar) within the container */
+        .typing-indicator-container .typing-status-text,
+        .typing-indicator-container .typing-bar {
+            display: none;
+        }
+
+        .typing-bar {
+            width: 50px;
+            height: 6px;
+            background-color: rgba(0, 0, 0, 0.3); /* Darker, more transparent background for the bar track */
+            border-radius: 3px;
+            overflow: hidden;
+            margin-left: 0.5em;
+            /* display property controlled by JS now */
+        }
+
+        .typing-bar::after {
+            content: '';
+            display: block;
+            width: 100%;
+            height: 100%;
+            background: var(--status-online); /* Use vibrant online status color for the moving bar */
+            transform: translateX(-100%);
+            animation: barLoad 1.5s infinite linear;
+        }
+
+        @keyframes barLoad {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+
+        @media (max-width: 768px) {
+            .app-container { flex-direction: column; width: 100%; height: 100vh; border-radius: 0; }
+            .sidebar { width: 100%; height: auto; max-height: 45vh; border-right: none; border-bottom: 1px solid var(--border-color); padding: 1rem; }
+            .chat-header, .contact-header { border-radius: 0; }
+            .input-area { flex-direction: column; }
+            .input-area input[type="text"] { margin-right: 0; margin-bottom: 0.75rem; }
+            .emoji-picker { justify-content: center; } /* Center emojis on small screens */
+        }
+    </style>
+</head>
+<body class="antialiased">
+    <div class="app-container">
+        <div class="sidebar">
+            <h2 class="rustchat-title text-3xl font-bold mb-4">RustChat</h2>
+            <div id="authSection">
+                <h3 class="text-lg font-semibold mb-3">Login Protocol</h3>
+                <input type="text" id="authUsername" class="input-field" placeholder="Callsign">
+                <input type="password" id="authPassword" class="input-field" placeholder="Passkey">
+                <button id="registerButton" class="action-button mb-2">Establish Link</button>
+                <button id="loginButton" class="action-button secondary">Sync to Grid</button>
+            </div>
+            <div id="profileSection" class="hidden">
+                <p class="text-lg font-semibold mb-2">Welcome, <span id="currentUsername"></span>!</p>
+                <button id="logoutButton" class="action-button secondary mt-2">Disconnect</button>
+            </div>
+            <div id="contactsSection" class="mt-6 flex-grow flex flex-col hidden">
+                <h3 class="text-xl font-bold text-cyan-200 mb-3">Active Connections</h3>
+                <div id="contactsList" class="contacts-list flex-grow overflow-y-auto pr-2 -mr-2">
+                    <p class="text-gray-500 text-sm italic" id="noContactsMessage">No connections detected.</p>
+                </div>
+                <div class="mt-4 pt-4 border-t border-gray-700">
+                    <h4 class="text-md font-semibold mb-2">Ping New Callsign</h4>
+                    <input type="text" id="addContactUsername" class="input-field" placeholder="Enter callsign to connect">
+                    <button id="addContactButton" class="action-button">Add Connection</button>
+                </div>
+            </div>
+        </div>
+        <div class="main-content">
+            <div class="chat-header">
+                <span id="chattingWith">Awaiting Transmission...</span>
+                <!-- Removed 'hidden' class from typingIndicatorContainer -->
+                <div id="typingIndicatorContainer" class="typing-indicator-container">
+                    <span id="typingStatusText" class="typing-status-text"></span>
+                    <div class="typing-bar"></div>
+                </div>
+            </div>
+            <div class="messages" id="messages">
+                <div class="system-message">Initialize connection protocol to begin.</div>
+            </div>
+            <div class="input-area">
+                <input type="text" id="messageInput" placeholder="Transmit message..." disabled>
+                <button id="sendButton" class="action-button" disabled>Send</button>
+                <div class="emoji-picker">
+                    <button type="button" onclick="insertEmoji('🚀')">🚀</button>
+                    <button type="button" onclick="insertEmoji('🌟')">🌟</button>
+                    <button type="button" onclick="insertEmoji('👽')">👽</button>
+                    <button type="button" onclick="insertEmoji('✨')">✨</button>
+                    <button type="button" onclick="insertEmoji('🌌')">🌌</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="messageBox" class="message-box"></div>
+
+   <script>
+        // --- Element Selectors ---
+        const authSection = document.getElementById('authSection');
+        const profileSection = document.getElementById('profileSection');
+        const contactsSection = document.getElementById('contactsSection');
+        const currentUsernameSpan = document.getElementById('currentUsername');
+        const logoutButton = document.getElementById('logoutButton');
+        const authUsernameInput = document.getElementById('authUsername');
+        const authPasswordInput = document.getElementById('authPassword');
+        const registerButton = document.getElementById('registerButton');
+        const loginButton = document.getElementById('loginButton');
+        const addContactUsernameInput = document.getElementById('addContactUsername');
+        const addContactButton = document.getElementById('addContactButton');
+        const contactsListDiv = document.getElementById('contactsList');
+        const noContactsMessage = document.getElementById('noContactsMessage');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const messagesDiv = document.getElementById('messages');
+        const chattingWithSpan = document.getElementById('chattingWith');
+        const messageBox = document.getElementById('messageBox');
+        const typingIndicatorContainer = document.getElementById('typingIndicatorContainer');
+        const typingStatusText = document.getElementById('typingStatusText'); // New selector for text within indicator
+        const typingBar = typingIndicatorContainer.querySelector('.typing-bar'); // Get direct reference to the bar
+        
+        // --- Application State ---
+        let currentUser = null; // Stores { user_id, username, session_token }
+        let ws = null;
+        let currentRecipient = null; // Stores { id, username } of the selected contact
+        let allMessages = {}; // Stores messages grouped by contact: { 'contact_user_id': [...] }
+        let typingTimeout;
+
+        // --- Utility Functions ---
+        function showMessageBox(message, isError = false) {
+            messageBox.textContent = message;
+            messageBox.className = `message-box ${isError ? 'error' : ''}`;
+            messageBox.style.display = 'block';
+            setTimeout(() => { messageBox.style.display = 'none'; }, 3000);
+        }
+
+        function handleLoginResponse(loginData) {
+            const userSession = {
+                user_id: loginData.user_id,
+                username: loginData.username,
+                session_token: loginData.session_key // The key from the server response
+            };
+            
+            currentUser = userSession;
+            localStorage.setItem('currentUser', JSON.stringify(userSession));
+            
+            updateUIForLogin();
+            connectWebSocket();
+            fetchContacts();
+        }
+        
+        function loadSessionFromStorage() {
+            const userString = localStorage.getItem('currentUser');
+            if (userString) {
+                currentUser = JSON.parse(userString);
+                updateUIForLogin();
+                connectWebSocket();
+                fetchContacts();
+            } else {
+                updateUIForLogout();
+            }
+        }
+        
+        function clearCurrentUser() {
+            localStorage.removeItem('currentUser');
+            currentUser = null;
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            updateUIForLogout();
+        }
+
+        function updateUIForLogin() {
+            authSection.classList.add('hidden');
+            profileSection.classList.remove('hidden');
+            contactsSection.classList.remove('hidden');
+            currentUsernameSpan.textContent = currentUser.username;
+            chattingWithSpan.textContent = "Select a connection to transmit";
+            enableChatInput(false);
+            messagesDiv.innerHTML = '<div class="system-message">Connection successful. Select a channel to begin transmission.</div>';
+        }
+
+        function updateUIForLogout() {
+            authSection.classList.remove('hidden');
+            profileSection.classList.add('hidden');
+            contactsSection.classList.add('hidden');
+            currentUsernameSpan.textContent = '';
+            chattingWithSpan.textContent = "Awaiting Connection...";
+            enableChatInput(false);
+            messagesDiv.innerHTML = '<div class="system-message">Initialize connection protocol to begin.</div>';
+            contactsListDiv.innerHTML = '<p class="text-gray-500 text-sm italic" id="noContactsMessage">No connections detected.</p>';
+            currentRecipient = null;
+        }
+
+        function enableChatInput(enabled) {
+            messageInput.disabled = !enabled;
+            sendButton.disabled = !enabled;
+        }
+
+       function appendMessage(msgData) {
+            const { from_username, message, type, from_user_id, timestamp, message_id } = msgData;
+
+            if (type === 'system') {
+                const sysMsgDiv = document.createElement('div');
+                sysMsgDiv.className = 'system-message';
+                sysMsgDiv.textContent = message;
+                messagesDiv.appendChild(sysMsgDiv);
+            } else {
+                const isSelf = from_user_id === currentUser.user_id;
+                const messageClass = isSelf ? 'sent' : 'received';
+
+                const messageBubble = document.createElement('div');
+                messageBubble.className = `message-bubble ${messageClass}`;
+                messageBubble.id = `msg-${message_id}`; 
+
+                if (!isSelf) {
+                    const senderSpan = document.createElement('div');
+                    senderSpan.className = 'message-sender';
+                    senderSpan.textContent = from_username;
+                    messageBubble.appendChild(senderSpan);
+                }
+
+                const messageText = document.createElement('span');
+                messageText.textContent = message;
+                messageBubble.appendChild(messageText);
+
+                if (timestamp) {
+                    const timeEl = document.createElement('div');
+                    timeEl.style.fontSize = '0.7rem';
+                    timeEl.style.opacity = 0.6;
+                    timeEl.style.marginTop = '0.25rem';
+                    timeEl.style.textAlign = 'right';
+                    const dt = new Date(timestamp);
+                    timeEl.textContent = dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    messageBubble.appendChild(timeEl);
+                }
+
+                messagesDiv.appendChild(messageBubble);
+            }
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function displayChatHistory(contactUserId) {
+            messagesDiv.innerHTML = ''; 
+            appendMessage({ type: 'system', message: `Channel open with ${currentRecipient.username}.` });
+
+            const history = allMessages[contactUserId] || [];
+            history.forEach(appendMessage);
+        }
+
+        async function apiCall(endpoint, method, body = null) {
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+
+                // Endpoints that do NOT require a session key
+                const publicEndpoints = ['register', 'login'];
+
+                // Only add session key if currentUser exists AND the endpoint is not public
+                if (currentUser && currentUser.session_token && !publicEndpoints.includes(endpoint)) {
+                    headers['x-session-key'] = currentUser.session_token;
+                }
+
+                // If the endpoint *requires* a session key and it's missing, then throw an error.
+                // This condition is now stricter and won't block initial register/login.
+                if (!publicEndpoints.includes(endpoint) && (!currentUser || !currentUser.session_token)) {
+                     console.warn(`Missing session token for endpoint ${endpoint}`);
+                     showMessageBox('You are not logged in. Please sign in again.', true);
+                     throw new Error('Session token missing for authenticated endpoint.');
+                }
+
+                const response = await fetch(`/${endpoint}`, {
+                    method,
+                    headers,
+                    body: body ? JSON.stringify(body) : null
+                });
+
+                // Read the response body as text first
+                const responseText = await response.text();
+                let responseData = {};
+
+                try {
+                    // Attempt to parse the text as JSON
+                    responseData = JSON.parse(responseText);
+                } catch (jsonParseError) {
+                    // If JSON parsing fails, use the raw text as the message, but log the error
+                    console.error(`Failed to parse JSON response for ${endpoint}. Raw text: "${responseText.substring(0, 200)}..." Error: ${jsonParseError}`);
+                    // Fallback to a generic error message or use a truncated raw text
+                    responseData = { message: `Server responded with non-JSON format or error. Raw: ${responseText.substring(0, 100)}...` };
+                }
+
+                if (!response.ok) {
+                    // If response is not OK, use the message from responseData or a generic one
+                    const errorMessage = responseData.message || `HTTP error! status: ${response.status} ${response.statusText}.`;
+                    throw new Error(errorMessage);
+                }
+                return responseData;
+            } catch (error) {
+                console.error(`API Call Error (${endpoint}):`, error);
+                showMessageBox(error.message, true);
+                throw error;
+            }
+        }
+
+
+        // --- Event Handlers ---
+        registerButton.addEventListener('click', async () => {
+            const username = authUsernameInput.value.trim();
+            const password = authPasswordInput.value.trim();
+            if (!username || !password) return showMessageBox(`Callsign and Passkey are required.`, true);
+            
+            try {
+                const response = await apiCall('register', 'POST', { username, password });
+                handleLoginResponse(response); 
+                showMessageBox(`Registration successful! You are now connected.`);
+                authUsernameInput.value = '';
+                authPasswordInput.value = '';
+            } catch (error) { /* Error is handled by apiCall */ }
+        });
+
+        loginButton.addEventListener('click', async () => {
+            const username = authUsernameInput.value.trim();
+            const password = authPasswordInput.value.trim();
+            if (!username || !password) return showMessageBox(`Callsign and Passkey are required.`, true);
+            
+            try {
+                const response = await apiCall('login', 'POST', { username, password });
+                handleLoginResponse(response); 
+                showMessageBox('Connection re-established!');
+                authUsernameInput.value = '';
+                authPasswordInput.value = '';
+            } catch (error) { /* Error is handled by apiCall */ }
+        });
+
+        logoutButton.addEventListener('click', clearCurrentUser);
+
+        addContactButton.addEventListener('click', async () => {
+            const contactUsername = addContactUsernameInput.value.trim();
+            if (!contactUsername) return;
+            if (currentUser && contactUsername === currentUser.username) {
+                return showMessageBox("Cannot establish a connection with yourself!", true);
+            }
+
+            try {
+                await apiCall('contacts', 'POST', { contact_username: contactUsername });
+                showMessageBox(`Connection with ${contactUsername} established!`);
+                addContactUsernameInput.value = '';
+                fetchContacts();
+            } catch (error) { /* Handled by apiCall */ }
+        });
+
+        sendButton.addEventListener('click', sendMessage);
+        messageInput.addEventListener('keypress', (e) => { 
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage(); 
+            }
+        });
+        
+        // Function to insert emoji at cursor position
+        function insertEmoji(emoji) {
+            const input = messageInput;
+            const start = input.selectionStart;
+            const end = input.selectionEnd;
+            input.value = input.value.substring(0, start) + emoji + input.value.substring(end);
+            input.selectionStart = input.selectionEnd = start + emoji.length;
+            input.focus();
+            // Trigger input event to send typing indicator if needed
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        function connectWebSocket() {
+            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+            if (!currentUser || !currentUser.session_token) return;
+
+            const wsUrl = `ws://${window.location.host}/ws?token=${currentUser.session_token}`;
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('WebSocket connection established.');
+                if (currentRecipient) enableChatInput(true);
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log("WS Received:", data);
+
+                switch(data.type) {
+                    case 'chatMessage':
+                        handleChatMessage(data);
+                        break;
+                    case 'statusMessage':
+                        handleStatusMessage(data);
+                        break;
+                    case 'typingIndicator':
+                        console.log("Received typing indicator:", data); // This log confirms receipt
+                        handleTypingStatus(data);
+                        break;
+                    case 'readReceipt':
+                        console.log(`Transmission ${data.message_id} received by ${data.from_user_id}`);
+                        break;
+                }
+            };
+
+            ws.onclose = (event) => { 
+                console.log('WebSocket connection severed. Code:', event.code, 'Reason:', event.reason);
+                enableChatInput(false);
+                document.querySelectorAll('.status-indicator').forEach(el => el.classList.remove('online'));
+                if (currentUser) {
+                    appendMessage({ type: 'system', message: `Connection lost. Attempting to re-sync...` });
+                    setTimeout(connectWebSocket, 3000); 
+                } else {
+                    appendMessage({ type: 'system', message: 'Disconnected from grid.' });
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                showMessageBox('WebSocket connection matrix unstable.', true);
+            };
+        }
+        
+        function handleTypingStatus(data) {
+            // Get references to the specific elements
+            const typingStatusTextElement = typingIndicatorContainer.querySelector('#typingStatusText');
+            const typingBarElement = typingIndicatorContainer.querySelector('.typing-bar');
+
+            // Only show typing indicator for the currently selected recipient
+            if (currentRecipient && data.from_user_id === currentRecipient.id) {
+                if (data.is_typing) {
+                    typingStatusTextElement.textContent = `${currentRecipient.username} is transmitting`;
+                    // Make text and bar visible
+                    typingStatusTextElement.style.display = 'inline'; /* or 'block' depending on desired layout */
+                    typingBarElement.style.display = 'block';
+                } else {
+                    typingStatusTextElement.textContent = ''; // Clear text
+                    // Hide text and bar
+                    typingStatusTextElement.style.display = 'none';
+                    typingBarElement.style.display = 'none';
+                }
+            } else {
+                // If it's a typing indicator for a different contact or no contact selected, hide them
+                typingStatusTextElement.textContent = '';
+                typingStatusTextElement.style.display = 'none';
+                typingBarElement.style.display = 'none';
+            }
+        }
+
+
+        function handleChatMessage(data) {
+            const isSelf = data.from_user_id === currentUser.user_id;
+            const contactIdForHistory = isSelf ? data.to_user_id : data.from_user_id;
+
+            if (!allMessages[contactIdForHistory]) {
+                allMessages[contactIdForHistory] = [];
+            }
+            allMessages[contactIdForHistory].push(data);
+            
+            if (currentRecipient && contactIdForHistory === currentRecipient.id) {
+                appendMessage(data);
+            } else if (!isSelf) {
+                showMessageBox(`Incoming transmission from ${data.from_username}!`);
+            }
+        }
+        
+        function handleStatusMessage(data) {
+            const contactElem = document.querySelector(`.contact-button[data-user-id="${data.user_id}"] .status-indicator`);
+            if (contactElem) {
+                if(data.status === 'online') {
+                    contactElem.classList.add('online');
+                } else {
+                    contactElem.classList.remove('online');
+                }
+            }
+        }
+
+        function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message || !currentRecipient) return;
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                return showMessageBox(`Not connected to transmission server.`, true);
+            }
+            const chatMessage = {
+                type: 'chatMessage', 
+                to_user_id: currentRecipient.id,
+                message: message
+            };
+
+            ws.send(JSON.stringify(chatMessage));
+            messageInput.value = '';
+            // Immediately send typing off when message is sent
+            clearTimeout(typingTimeout);
+            ws.send(JSON.stringify({ type: "typingIndicator", to_user_id: currentRecipient.id, is_typing: false }));
+        }
+
+        async function fetchContacts() {
+            try {
+                const contacts = await apiCall('contacts', 'GET');
+                const noContactsMsg = document.getElementById('noContactsMessage');
+                contactsListDiv.innerHTML = ''; // Clear existing contacts
+                if (contacts.length === 0) {
+                    contactsListDiv.appendChild(noContactsMsg);
+                    noContactsMsg.classList.remove('hidden');
+                } else {
+                    if(noContactsMsg) noContactsMsg.classList.add('hidden');
+                    contacts.forEach(contact => {
+                        if (currentUser && contact.id === currentUser.user_id) return; // Don't list self as contact
+                        const contactButton = document.createElement('button');
+                        contactButton.className = 'contact-button';
+                        contactButton.dataset.userId = contact.id;
+                        contactButton.dataset.username = contact.username;
+                        const nameSpan = document.createElement('span');
+                        nameSpan.textContent = contact.username;
+                        const statusIndicator = document.createElement('div');
+                        statusIndicator.className = 'status-indicator';
+                        contactButton.appendChild(nameSpan);
+                        contactButton.appendChild(statusIndicator);
+                        contactButton.addEventListener('click', () => selectContact(contact));
+                        contactsListDiv.appendChild(contactButton);
+                    });
+                }
+            } catch (error) { /* Error handled by apiCall */ }
+        }
+
+        function selectContact(contact) {
+            // Hide typing indicator elements when switching contacts
+            typingStatusText.textContent = '';
+            typingStatusText.style.display = 'none';
+            typingBar.style.display = 'none';
+
+            document.querySelectorAll('.contact-button').forEach(btn => btn.classList.remove('active'));
+            const btnElement = contactsListDiv.querySelector(`[data-user-id=\"${contact.id}\"]`);
+            if (btnElement) btnElement.classList.add('active');
+            
+            currentRecipient = contact;
+            chattingWithSpan.textContent = `Transmitting to: ${contact.username}`;
+            enableChatInput(true);
+            messageInput.focus();
+            displayChatHistory(contact.id);
+        }
+
+        messageInput.addEventListener('input', () => {
+            if (!currentRecipient || !ws || ws.readyState !== WebSocket.OPEN) return;
+            
+            // Send typing ON
+            ws.send(JSON.stringify({ type: "typingIndicator", to_user_id: currentRecipient.id, is_typing: true }));
+
+            // Reset timeout to send typing OFF
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                ws.send(JSON.stringify({ type: "typingIndicator", to_user_id: currentRecipient.id, is_typing: false }));
+            }, 2000); // Send typing OFF after 2 seconds of inactivity
+        });
+
+        // --- Initial Load ---
+        document.addEventListener('DOMContentLoaded', loadSessionFromStorage);
+    </script>
+</body>
+</html>
