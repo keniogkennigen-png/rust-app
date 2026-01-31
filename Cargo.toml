@@ -1,0 +1,16 @@
+[package]
+name = "rust-chat"
+version = "0.1.0"
+edition = "2021"
+description = "Una aplicación de chat en tiempo real construida con Rust y WebSockets"
+authors = ["Keniogkennigen"]
+
+[dependencies]
+warp = "0.3"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.0", features = ["v4"] }
+chrono = "0.4"
+futures = "0.3"
+bcrypt = "0.15"
