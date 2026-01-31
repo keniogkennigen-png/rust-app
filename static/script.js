@@ -3,8 +3,13 @@ let currentSessionKey = null;
 
 // 1. LOGIN / REGISTER FUNCTION
 async function authenticate(type) {
-    const username = document.getElementById('username').value;
-    const password = document.getElementById('password').value;
+    const usernameEl = document.getElementById('username');
+    const passwordEl = document.getElementById('password');
+
+    if (!usernameEl || !passwordEl) return;
+
+    const username = usernameEl.value;
+    const password = passwordEl.value;
 
     try {
         const response = await fetch(`/${type}`, {
@@ -16,35 +21,32 @@ async function authenticate(type) {
         const data = await response.json();
 
         if (response.ok && data.session_key) {
-            // Store session data
+            // Success: Store credentials and switch screens
             currentSessionKey = data.session_key;
             localStorage.setItem('session_key', data.session_key);
             localStorage.setItem('username', data.username);
             
-            // Switch UI screens
             document.getElementById('auth-screen').style.display = 'none';
             document.getElementById('chat-screen').style.display = 'block';
 
-            // Establish secure uplink now that we have a valid key
+            // Now that we HAVE a key, establish the uplink
             connectWebSocket(data.session_key);
             
-            // If you have a contact list function, trigger it here
             if (typeof fetchContacts === "function") fetchContacts();
-            
         } else {
-            alert(data.message || "Uplink denied by server.");
+            alert(data.message || "Uplink denied by command.");
         }
     } catch (err) {
         console.error("Auth System Error:", err);
-        alert("System Error: Could not reach authentication server.");
+        alert("System Error: Communications array offline.");
     }
 }
 
-// 2. WEBSOCKET CONNECTION (The "Transmission" Logic)
+// 2. WEBSOCKET CONNECTION
 function connectWebSocket(sessionKey) {
-    // SAFETY GATE: Prevent connection attempts if key is missing or invalid
+    // STOP the loop if the key is missing
     if (!sessionKey || sessionKey === "undefined") {
-        console.warn("Uplink aborted: Valid Session Key required.");
+        console.warn("Uplink aborted: No valid Session Key.");
         return;
     }
 
@@ -53,6 +55,10 @@ function connectWebSocket(sessionKey) {
     const wsUrl = `${protocol}//${host}/chat/${sessionKey}`;
 
     console.log("Attempting uplink to:", wsUrl);
+    
+    // Close existing socket if it exists
+    if (socket) socket.close();
+    
     socket = new WebSocket(wsUrl);
 
     socket.onopen = () => {
@@ -65,76 +71,60 @@ function connectWebSocket(sessionKey) {
             const msg = JSON.parse(event.data);
             displayMessage(msg);
         } catch (e) {
-            console.error("Transmission Error: Failed to parse incoming data.", e);
+            console.error("Failed to parse data packet:", event.data);
         }
     };
 
     socket.onclose = (event) => {
         console.log("Uplink lost. Code:", event.code);
-        updateStatus("OFFLINE - Reconnecting...");
+        updateStatus("OFFLINE");
         
-        // Attempt reconnection after 5 seconds if we still have a key
+        // Reconnect after 5 seconds ONLY if we are logged in
         if (currentSessionKey) {
             setTimeout(() => connectWebSocket(currentSessionKey), 5000);
         }
     };
 
     socket.onerror = (error) => {
-        console.error("WebSocket Protocol Error:", error);
+        console.error("Transmission Protocol Error:", error);
     };
 }
 
-// 3. SEND MESSAGE FUNCTION
+// 3. MESSAGE TRANSMISSION
 function sendMessage() {
     const input = document.getElementById('message-input');
-    const targetUser = document.getElementById('target-user-id'); // Ensure this ID exists in HTML
+    const target = document.getElementById('target-user-id');
 
     if (socket && socket.readyState === WebSocket.OPEN && input.value) {
         const payload = {
             type: "chatMessage",
-            toUserId: targetUser ? targetUser.value : "all", // Fallback if no target selected
+            toUserId: target ? target.value : "all",
             message: input.value
         };
         socket.send(JSON.stringify(payload));
         input.value = '';
-    } else {
-        console.warn("Cannot send: Socket not connected.");
     }
 }
 
-// 4. UI UPDATE HELPERS
+// 4. UI HELPERS
 function displayMessage(msg) {
     const chatBox = document.getElementById('chat-box');
     if (!chatBox) return;
 
-    const msgElement = document.createElement('div');
-    msgElement.className = "message-entry mb-2 text-sm";
+    const div = document.createElement('div');
+    div.className = "mb-2 text-sm animate-pulse";
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     
-    // Formatting for the Sci-Fi theme
-    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    msgElement.innerHTML = `<span class="text-gray-500">[${timestamp}]</span> <span class="text-cyan-400">${msg.fromUsername}:</span> <span class="text-white">${msg.message}</span>`;
+    div.innerHTML = `<span class="opacity-50">[${time}]</span> <span class="text-cyan-400">${msg.fromUsername}:</span> <span class="text-white">${msg.message}</span>`;
     
-    chatBox.appendChild(msgElement);
-    chatBox.scrollTop = chatBox.scrollHeight; // Auto-scroll to bottom
+    chatBox.appendChild(div);
+    chatBox.scrollTop = chatBox.scrollHeight;
 }
 
 function updateStatus(status) {
-    const statusEl = document.getElementById('connection-status');
-    if (statusEl) {
-        statusEl.innerText = `STATUS: ${status}`;
-        // Optional: Change color based on status
-        statusEl.style.color = status === "ONLINE" ? "#4ade80" : "#ef4444";
+    const el = document.getElementById('connection-status');
+    if (el) {
+        el.innerText = `STATUS: ${status}`;
+        el.className = status === "ONLINE" ? "text-green-500" : "text-red-500";
     }
 }
-
-// 5. AUTO-LOGIN CHECK (Optional)
-window.onload = () => {
-    const savedKey = localStorage.getItem('session_key');
-    if (savedKey) {
-        currentSessionKey = savedKey;
-        // Optionally auto-connect here if you want to skip login screen
-        // document.getElementById('auth-screen').style.display = 'none';
-        // document.getElementById('chat-screen').style.display = 'block';
-        // connectWebSocket(savedKey);
-    }
-};
