@@ -1,30 +1,17 @@
-// src/main.rs
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use warp::{
-    http::StatusCode,
-    ws,
-    Filter, Rejection, Reply,
-};
-use warp::reply::{with_status, json};
+use warp::{Filter, Rejection, Reply};
+use crate::ws_handlers::{AppState, UserSession};
 
-// Import AppState, ErrorResponse, and UserSession from the ws_handlers module
-use crate::ws_handlers::{AppState, ErrorResponse, UserSession};
+mod ws_handlers;
 
-mod ws_handlers; // Declare your WebSocket handlers module
-
-
-// A filter that provides the `AppState` to handlers.
 fn with_app_state(
     app_state: Arc<AppState>,
 ) -> impl Filter<Extract = (Arc<AppState>,), Error = std::convert::Infallible> + Clone {
     warp::any().map(move || app_state.clone())
 }
 
-// A combined filter to extract the session key and authenticate the user.
-// This filter is specifically designed for HTTP requests where the session key is in a header.
 fn with_authenticated_session(
     app_state: Arc<AppState>,
 ) -> impl Filter<Extract = (UserSession,), Error = Rejection> + Clone {
@@ -34,44 +21,61 @@ fn with_authenticated_session(
             let sessions = app_state_auth.user_sessions.lock().await;
             match sessions.get(&session_key) {
                 Some(session) => Ok(session.clone()),
-                None => Err(warp::reject::custom(ErrorResponse {
-                    message: "Unauthorized: Invalid session key.".to_string(),
-                })),
+                None => Err(warp::reject::custom(ws_handlers::AuthError)),
             }
         })
 }
 
-// Custom rejection handler to convert `ErrorResponse` rejections into HTTP responses.
-async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
-    if err.is_not_found() {
-        eprintln!("Rejection: Not Found - {:?}", err);
-        Ok(with_status(json(&ErrorResponse { message: "Not Found".to_string() }), StatusCode::NOT_FOUND))
-    } else if let Some(e) = err.find::<ErrorResponse>() {
-        eprintln!("Rejection: Custom ErrorResponse - Message: {:?}", e.message);
-        Ok(with_status(json(e), StatusCode::BAD_REQUEST))
-    }
-    // Handle the built-in `warp::reject::MethodNotAllowed` specifically
-    else if let Some(_) = err.find::<warp::reject::MethodNotAllowed>() {
-        eprintln!("Rejection: Method Not Allowed - {:?}", err);
-        Ok(with_status(json(&ErrorResponse { message: "Method Not Allowed".to_string() }), StatusCode::METHOD_NOT_ALLOWED))
-    }
-    // Re-reject other unhandled Rejection types so Warp can handle them
-    // This prevents a blanket 500 and allows Warp to propagate more serious internal errors.
-    else {
-        eprintln!("Rejection: Unhandled type of rejection, propagating - {:?}", err);
-        Err(err) // Re-reject the error
-    }
-}
-
-
-// src/main.rs
-
 #[tokio::main]
 async fn main() {
-    // ... (Keep your AppState and Routes logic as is)
+    let app_state = Arc::new(AppState {
+        users: Mutex::new(HashMap::new()),
+        user_sessions: Mutex::new(HashMap::new()),
+        active_connections: Mutex::new(HashMap::new()),
+    });
 
-    // 1. Look for the PORT environment variable set by Railway
-    // 2. Default to 3030 if running locally
+    let static_files = warp::fs::dir("static")
+        .or(warp::get().and(warp::path::end()).and(warp::fs::file("static/index.html")));
+
+    let chat_route = warp::path("chat")
+        .and(warp::ws())
+        .and(warp::path::param())
+        .and(with_app_state(app_state.clone()))
+        .and_then(ws_handlers::chat_handler);
+
+    let register_route = warp::path("register")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(with_app_state(app_state.clone()))
+        .and_then(ws_handlers::register_handler);
+
+    let login_route = warp::path("login")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(with_app_state(app_state.clone()))
+        .and_then(ws_handlers::login_handler);
+
+    let contacts_post_route = warp::path("contacts")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(with_authenticated_session(app_state.clone()))
+        .and(with_app_state(app_state.clone()))
+        .and_then(ws_handlers::add_contact_handler);
+
+    let contacts_get_route = warp::path("contacts")
+        .and(warp::get())
+        .and(with_authenticated_session(app_state.clone()))
+        .and(with_app_state(app_state.clone()))
+        .and_then(ws_handlers::get_contacts_handler);
+
+    let routes = static_files
+        .or(chat_route)
+        .or(register_route)
+        .or(login_route)
+        .or(contacts_post_route)
+        .or(contacts_get_route);
+
+    // DYNAMIC PORT: Railway sets the PORT env var. This is the key fix!
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "3030".to_string())
         .parse()
@@ -82,47 +86,4 @@ async fn main() {
     warp::serve(routes)
         .run(([0, 0, 0, 0], port))
         .await;
-}
-
-    // Registration route
-    let register_route = warp::path("register")
-        .and(warp::post())
-        .and(warp::body::json())
-        .and(with_app_state(app_state.clone()))
-        .and_then(ws_handlers::register_handler);
-
-    // Login route
-    let login_route = warp::path("login")
-        .and(warp::post())
-        .and(warp::body::json())
-        .and(with_app_state(app_state.clone()))
-        .and_then(ws_handlers::login_handler);
-
-    // Add contact route
-    let contacts_post_route = warp::path("contacts")
-        .and(warp::post())
-        .and(warp::body::json())
-        .and(with_authenticated_session(app_state.clone())) // This filter expects header "x-session-key"
-        .and(with_app_state(app_state.clone()))
-        .and_then(ws_handlers::add_contact_handler);
-
-    // Get contacts route
-    let contacts_get_route = warp::path("contacts")
-        .and(warp::get())
-        .and(with_authenticated_session(app_state.clone())) // This filter expects header "x-session-key"
-        .and(with_app_state(app_state.clone()))
-        .and_then(ws_handlers::get_contacts_handler);
-
-    // The order of routes matters. Static files should generally be checked first.
-    let routes = static_files // This will now serve 'static/index.html' for '/'
-        .or(chat_route)
-        .or(register_route)
-        .or(login_route)
-        .or(contacts_post_route)
-        .or(contacts_get_route)
-        .with(warp::log("rust_chat"))
-        .recover(handle_rejection);
-
-    // Use 0.0.0.0 to be accessible externally
-    warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
 }
