@@ -34,7 +34,7 @@ pub struct UserDTO {
     pub username: String,
 }
 /// Represents a registered user in the system.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct User {
     pub id: Uuid,
     pub username: String,
