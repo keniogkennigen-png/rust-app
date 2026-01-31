@@ -470,13 +470,14 @@ pub async fn get_contacts_handler(
     let users = app_state.users.lock().await;
     if let Some(user) = users.get(&session.username) {
         let contacts_map = user.contacts.lock().await;
-        let contacts_list: Vec<_> = contacts_map.iter().map(|(id, username)| {
-            serde_json::json!({ "id": id, "username": username })
+        
+        // Convert the internal HashMap data into a list of serializable DTOs
+        let contacts_list: Vec<UserDTO> = contacts_map.iter().map(|(id, username)| {
+            UserDTO { id: *id, username: username.clone() }
         }).collect();
-        println!("Retrieving contacts for user {}: {:?}", session.username, contacts_list); // Added log
+
         Ok(warp::reply::json(&contacts_list))
     } else {
-        eprintln!("Get contacts failed: User '{}' not found in users map during contacts retrieval.", session.username);
-        Err(warp::reject::custom(ErrorResponse { message: "User session invalid or user data missing.".to_string() }))
+        Err(warp::reject::custom(ErrorResponse { message: "User not found".into() }))
     }
 }
