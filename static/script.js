@@ -533,4 +533,4 @@ function updateStatus(status) {
     }
 }
 
-
+     document.addEventListener('DOMContentLoaded', loadSessionFromStorage);
