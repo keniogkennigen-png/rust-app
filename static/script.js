@@ -6,21 +6,32 @@ async function authenticate(type) {
     const username = document.getElementById('username').value;
     const password = document.getElementById('password').value;
 
-    const response = await fetch(`/${type}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-    });
+    try {
+        const response = await fetch(`/${type}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
 
-    const data = await response.json();
+        const data = await response.json();
 
-    if (response.ok) {
-        currentSessionKey = data.session_key;
-        document.getElementById('auth-screen').style.display = 'none';
-        document.getElementById('chat-screen').style.display = 'block';
-        connectWebSocket(data.session_key);
-    } else {
-        alert(data.message || "Authentication failed");
+        if (response.ok && data.session_key) {
+            // 1. Store the key
+            localStorage.setItem('session_key', data.session_key);
+            localStorage.setItem('username', data.username);
+            
+            // 2. Switch screens
+            document.getElementById('auth-screen').style.display = 'none';
+            document.getElementById('chat-screen').style.display = 'block';
+
+            // 3. ONLY NOW connect to the server
+            connectWebSocket(data.session_key);
+            fetchContacts(); // Call this now that we are authenticated
+        } else {
+            alert(data.message || "Uplink denied.");
+        }
+    } catch (err) {
+        console.error("Auth System Error:", err);
     }
 }
 
