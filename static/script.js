@@ -19,7 +19,7 @@
         const messageBox = document.getElementById('messageBox');
         const typingIndicatorContainer = document.getElementById('typingIndicatorContainer');
         const typingStatusText = document.getElementById('typingStatusText'); // New selector for text within indicator
-        const typingBar = typingIndicatorContainer.querySelector('.typing-bar'); // Get direct reference to the bar
+        const typingBar = document.getElementById('typing-bar');// Get direct reference to the bar
         
         // --- Application State ---
         let currentUser = null; // Stores { user_id, username, session_token }
