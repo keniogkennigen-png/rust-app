@@ -64,26 +64,21 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Rejection> {
 }
 
 
+// src/main.rs
+
 #[tokio::main]
 async fn main() {
-    let app_state = Arc::new(AppState {
-        users: Mutex::new(HashMap::new()),
-        user_sessions: Mutex::new(HashMap::new()),
-        active_connections: Mutex::new(HashMap::new()),
-    });
+    // ... (Keep your AppState and Routes logic as is)
 
-    // --- ROUTES (Keep your existing route definitions here) ---
-    // ... (Your login_route, register_route, etc.)
-
-    // --- DYNAMIC PORT LOGIC ---
-    let port_key = "PORT";
-    let port: u16 = std::env::var(port_key)
+    // 1. Look for the PORT environment variable set by Railway
+    // 2. Default to 3030 if running locally
+    let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "3030".to_string())
         .parse()
         .expect("PORT must be a number");
 
     println!("Starting chat server on 0.0.0.0:{}", port);
-    
+
     warp::serve(routes)
         .run(([0, 0, 0, 0], port))
         .await;
