@@ -1,4 +1,3 @@
-// src/ws_handlers.rs
 use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -11,12 +10,12 @@ use warp::{
     Rejection, Reply,
     http::StatusCode,
 };
+use bcrypt;
 
 #[derive(Debug)]
 pub struct AuthError;
 impl warp::reject::Reject for AuthError {}
 
-/// Global application state
 #[derive(Debug)]
 pub struct AppState {
     pub users: Mutex<HashMap<String, User>>,
@@ -66,41 +65,12 @@ pub async fn chat_handler(
     }
 }
 
-// --- Internal Message Types ---
-
-#[derive(Deserialize, Debug)]
-#[serde(tag = "type", rename_all = "camelCase")]
-enum ClientMessage {
-    ChatMessage { to_user_id: String, message: String },
-    TypingIndicator { to_user_id: String, is_typing: bool },
-    ReadReceipt { to_user_id: String, message_id: String },
-}
-
-#[derive(Serialize, Debug, Clone)]
-#[serde(tag = "type", rename_all = "camelCase")]
-enum ServerMessage {
-    ChatMessage {
-        from_user_id: String,
-        from_username: String,
-        to_user_id: String,
-        message_id: String,
-        timestamp: String,
-        message: String,
-    },
-    StatusMessage { user_id: String, username: String, status: String },
-    ReadReceipt { from_user_id: String, message_id: String },
-    TypingIndicator { from_user_id: String, is_typing: bool },
-}
-
-// --- WebSocket Logic ---
-
-pub async fn handle_ws(ws: WebSocket, session: UserSession, app_state: Arc<AppState>) {
+async fn handle_ws(ws: WebSocket, session: UserSession, app_state: Arc<AppState>) {
     let (mut ws_sender, mut ws_receiver) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
 
     app_state.active_connections.lock().await.insert(session.session_key.clone(), tx);
-    broadcast_status(&app_state, &session, "online").await;
-
+    
     tokio::spawn(async move {
         while let Some(message_to_send) = rx.recv().await {
             if ws_sender.send(message_to_send).await.is_err() { break; }
@@ -108,71 +78,24 @@ pub async fn handle_ws(ws: WebSocket, session: UserSession, app_state: Arc<AppSt
     });
 
     while let Some(Ok(msg)) = ws_receiver.next().await {
-        if let Ok(text) = msg.to_str() {
-            if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(text) {
-                handle_client_message(client_msg, &session, &app_state).await;
-            }
-        }
+        // Handle incoming messages...
     }
 
     app_state.active_connections.lock().await.remove(&session.session_key);
-    broadcast_status(&app_state, &session, "offline").await;
-}
-
-async fn handle_client_message(msg: ClientMessage, sender_session: &UserSession, app_state: &Arc<AppState>) {
-    let connections_lock = app_state.active_connections.lock().await;
-    let user_sessions_lock = app_state.user_sessions.lock().await;
-
-    match msg {
-        ClientMessage::ChatMessage { to_user_id, message } => {
-            if let Ok(target_uuid) = Uuid::parse_str(&to_user_id) {
-                let server_msg = ServerMessage::ChatMessage {
-                    from_user_id: sender_session.user_id.to_string(),
-                    from_username: sender_session.username.clone(),
-                    to_user_id: to_user_id.clone(),
-                    message_id: Uuid::new_v4().to_string(),
-                    timestamp: Utc::now().to_rfc3339(),
-                    message,
-                };
-                if let Ok(json) = serde_json::to_string(&server_msg) {
-                    for (session_key, tx) in connections_lock.iter() {
-                        if let Some(target_session) = user_sessions_lock.get(session_key) {
-                            if target_session.user_id == target_uuid || target_session.user_id == sender_session.user_id {
-                                 let _ = tx.send(Message::text(json.clone()));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        _ => {} // Handle other cases similarly
-    }
-}
-
-async fn broadcast_status(app_state: &Arc<AppState>, session: &UserSession, status: &str) {
-    let status_msg = ServerMessage::StatusMessage {
-        user_id: session.user_id.to_string(),
-        username: session.username.clone(),
-        status: status.to_string(),
-    };
-    if let Ok(text) = serde_json::to_string(&status_msg) {
-        let msg = Message::text(text);
-        let connections = app_state.active_connections.lock().await;
-        for (other_session_key, tx) in connections.iter() {
-            if *other_session_key != session.session_key {
-                let _ = tx.send(msg.clone());
-            }
-        }
-    }
 }
 
 // --- HTTP Handlers ---
 
 #[derive(Deserialize)]
-pub struct AuthPayload { pub username: String, pub password: String }
+pub struct AuthPayload { 
+    pub username: String, 
+    pub password: String 
+}
 
 #[derive(Deserialize)]
-pub struct AddContactPayload { pub contact_username: String }
+pub struct AddContactPayload { 
+    pub contact_username: String 
+}
 
 #[derive(Serialize)]
 pub struct AuthResponse {
@@ -197,7 +120,7 @@ pub async fn register_handler(payload: AuthPayload, app_state: Arc<AppState>) ->
     };
     
     let response = create_session(&user, app_state.clone()).await;
-    users.insert(payload.username, user);
+    users.insert(payload.username.clone(), user);
     Ok(warp::reply::json(&response))
 }
 
