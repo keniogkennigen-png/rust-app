@@ -1,5 +1,5 @@
 # Use an official Rust runtime as a parent image
-FROM rust:1.75-slim AS builder
+FROM rust:1.83-slim AS builder
 
 # Set working directory
 WORKDIR /app
