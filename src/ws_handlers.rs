@@ -40,7 +40,7 @@ pub struct User {
 
 /// Represents an active user session, holding basic user information
 /// that's validated with a session key.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct UserSession {
     pub user_id: Uuid,
     pub username: String,
