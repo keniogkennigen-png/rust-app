@@ -1,9 +1,5 @@
 // src/ws_handlers.rs
-#[derive(Serialize)]
-pub struct UserDTO {
-    pub id: Uuid,
-    pub username: String,
-}
+
 use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -17,79 +13,59 @@ use warp::{
     Rejection, Reply,
 };
 use bcrypt;
-use warp::reject::Reject; // Import the Reject trait
+use warp::reject::Reject;
 
 /// Global application state, shared across all handlers.
 #[derive(Debug)]
 pub struct AppState {
-    // Stores registered users: username -> User struct
     pub users: Mutex<HashMap<String, User>>,
-    // Stores active user sessions: session_key (UUID string) -> UserSession struct
-    // The key here is the unique session_key itself.
     pub user_sessions: Mutex<HashMap<String, UserSession>>,
-    // Stores active WebSocket connections: session_key (String) -> mpsc sender channel
-    // Now keyed by the unique session_key, allowing multiple connections per user.
     pub active_connections: Mutex<HashMap<String, mpsc::UnboundedSender<Message>>>,
 }
 
-#[derive(Serialize)]
+/// Data Transfer Object for sending user info over the API.
+/// This is safe to serialize because it contains no Mutexes.
+#[derive(Serialize, Clone, Debug)]
 pub struct UserDTO {
     pub id: Uuid,
     pub username: String,
 }
+
 /// Represents a registered user in the system.
+/// NOTE: Removed #[derive(Serialize)] because Mutex cannot be serialized.
 #[derive(Debug, Clone)]
 pub struct User {
     pub id: Uuid,
     pub username: String,
     pub password_hash: String,
-    // Stores contacts: contact_user_id (UUID) -> contact_username (String)
     pub contacts: Arc<Mutex<HashMap<Uuid, String>>>,
 }
 
-/// Represents an active user session, holding basic user information
-/// that's validated with a session key.
+/// Represents an active user session.
 #[derive(Clone, Debug, Serialize)]
 pub struct UserSession {
     pub user_id: Uuid,
     pub username: String,
-    pub session_key: String, // Added session_key to UserSession
+    pub session_key: String,
 }
 
-/// Custom error response struct for consistent API error messages.
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub message: String,
 }
 
-// REQUIRED: Implement the `warp::reject::Reject` trait for your custom error.
-// This allows `warp::reject::custom` to accept `ErrorResponse`.
 impl Reject for ErrorResponse {}
-
 
 // --- WebSocket Message Structures ---
 
-/// Messages sent FROM the client TO the server.
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum ClientMessage {
-    ChatMessage {
-        to_user_id: Uuid,
-        message: String,
-    },
-    TypingIndicator {
-        to_user_id: Uuid,
-        is_typing: bool,
-    },
-    // The client sends this when it has displayed a message.
-    ReadReceipt {
-        // This is the *original sender* of the message that was just read.
-        to_user_id: Uuid,
-        message_id: String,
-    },
+    ChatMessage { to_user_id: Uuid, message: String },
+    TypingIndicator { to_user_id: Uuid, is_typing: bool },
+    ReadReceipt { to_user_id: Uuid, message_id: String },
 }
 
-/// Messages sent FROM the server TO the clients.
 #[derive(Serialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum ServerMessage {
@@ -99,94 +75,43 @@ enum ServerMessage {
         to_user_id: Uuid,
         message_id: String,
         timestamp: String,
-        // Emojis are supported natively by Rust's UTF-8 String type.
         message: String,
     },
-    StatusMessage {
-        user_id: Uuid,
-        username: String,
-        status: String, // "online" or "offline"
-    },
-    // The server forwards this receipt to the original message sender.
-    ReadReceipt {
-        from_user_id: Uuid, // The user who just read the message.
-        message_id: String,
-    },
-    TypingIndicator {
-        from_user_id: Uuid,
-        is_typing: bool,
-    },
+    StatusMessage { user_id: Uuid, username: String, status: String },
+    ReadReceipt { from_user_id: Uuid, message_id: String },
+    TypingIndicator { from_user_id: Uuid, is_typing: bool },
 }
 
-/// Main handler for an active WebSocket connection.
+// --- WebSocket Handler ---
+
 pub async fn handle_ws(ws: WebSocket, session: UserSession, app_state: Arc<AppState>) {
-    // The `.split()` method is now available because `StreamExt` is in scope.
     let (mut ws_sender, mut ws_receiver) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
 
-    // Add this user's sending channel to the global map of active connections,
-    // using the unique session_key as the identifier for this specific connection.
-    app_state
-        .active_connections
-        .lock()
-        .await
-        .insert(session.session_key.clone(), tx);
-    
-    // Announce to everyone that this user is now online.
-    // This will broadcast the status based on the user_id,
-    // which should update all instances of that user in others' contact lists.
+    app_state.active_connections.lock().await.insert(session.session_key.clone(), tx);
     broadcast_status(&app_state, &session, "online").await;
 
-    // This task forwards messages from the channel to the client's WebSocket sender.
     tokio::spawn(async move {
         while let Some(message_to_send) = rx.recv().await {
-            if ws_sender.send(message_to_send).await.is_err() {
-                // Client disconnected.
-                break;
-            }
+            if ws_sender.send(message_to_send).await.is_err() { break; }
         }
     });
 
-    // This loop handles incoming messages from the client.
     while let Some(Ok(msg)) = ws_receiver.next().await {
         if let Ok(text) = msg.to_str() {
-            match serde_json::from_str::<ClientMessage>(text) { // Changed ClientWebSocketMessage to ClientMessage
-                Ok(client_msg) => {
-                    handle_client_message(client_msg, &session, &app_state).await;
-                }
-                Err(e) => {
-                    eprintln!("Error deserializing client message: {}", e);
-                }
+            if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(text) {
+                handle_client_message(client_msg, &session, &app_state).await;
             }
         }
     }
 
-    // -- Cleanup on Disconnect --
-    println!("User '{}' (session: {}) disconnected.", session.username, session.session_key);
-    // Remove the connection using its unique session key.
-    app_state
-        .active_connections
-        .lock()
-        .await
-        .remove(&session.session_key);
-    
-    // Announce to everyone that this user is now offline.
-    // This will broadcast the status based on the user_id.
-    // Note: A user is only truly "offline" if ALL their sessions are disconnected.
-    // For simplicity here, we broadcast if *this* session disconnects.
-    // A more robust solution would track active session count per user.
+    app_state.active_connections.lock().await.remove(&session.session_key);
     broadcast_status(&app_state, &session, "offline").await;
 }
 
-/// Processes a deserialized message from a client and forwards it appropriately.
-async fn handle_client_message(
-    msg: ClientMessage,
-    sender_session: &UserSession,
-    app_state: &Arc<AppState>,
-) {
+async fn handle_client_message(msg: ClientMessage, sender_session: &UserSession, app_state: &Arc<AppState>) {
     let connections_lock = app_state.active_connections.lock().await;
     let user_sessions_lock = app_state.user_sessions.lock().await;
-
 
     match msg {
         ClientMessage::ChatMessage { to_user_id, message } => {
@@ -198,20 +123,10 @@ async fn handle_client_message(
                 timestamp: Utc::now().to_rfc3339(),
                 message,
             };
-
             if let Ok(json) = serde_json::to_string(&server_msg) {
-                // Send to ALL active sessions belonging to the recipient user
                 for (session_key, tx) in connections_lock.iter() {
                     if let Some(target_session) = user_sessions_lock.get(session_key) {
-                        if target_session.user_id == to_user_id {
-                             let _ = tx.send(Message::text(json.clone()));
-                        }
-                    }
-                }
-                // Also send back to all sessions of the sender for UI sync
-                for (session_key, tx) in connections_lock.iter() {
-                    if let Some(target_session) = user_sessions_lock.get(session_key) {
-                        if target_session.user_id == sender_session.user_id {
+                        if target_session.user_id == to_user_id || target_session.user_id == sender_session.user_id {
                              let _ = tx.send(Message::text(json.clone()));
                         }
                     }
@@ -219,14 +134,10 @@ async fn handle_client_message(
             }
         }
         ClientMessage::TypingIndicator { to_user_id, is_typing } => {
-            let server_msg = ServerMessage::TypingIndicator {
-                from_user_id: sender_session.user_id,
-                is_typing,
-            };
+            let server_msg = ServerMessage::TypingIndicator { from_user_id: sender_session.user_id, is_typing };
             if let Ok(json) = serde_json::to_string(&server_msg) {
                 for (session_key, tx) in connections_lock.iter() {
                     if let Some(target_session) = user_sessions_lock.get(session_key) {
-                        // Typing indicators only go to sessions of the recipient user
                         if target_session.user_id == to_user_id {
                              let _ = tx.send(Message::text(json.clone()));
                         }
@@ -235,14 +146,10 @@ async fn handle_client_message(
             }
         }
         ClientMessage::ReadReceipt { to_user_id, message_id } => {
-            let server_msg = ServerMessage::ReadReceipt {
-                from_user_id: sender_session.user_id, // The user who just read the message.
-                message_id,
-            };
+            let server_msg = ServerMessage::ReadReceipt { from_user_id: sender_session.user_id, message_id };
             if let Ok(json) = serde_json::to_string(&server_msg) {
                 for (session_key, tx) in connections_lock.iter() {
                     if let Some(target_session) = user_sessions_lock.get(session_key) {
-                        // Read receipts only go to sessions of the original message sender (to_user_id here refers to the original sender's ID)
                         if target_session.user_id == to_user_id {
                              let _ = tx.send(Message::text(json.clone()));
                         }
@@ -253,8 +160,6 @@ async fn handle_client_message(
     }
 }
 
-
-/// Broadcasts a user's status to all other connected clients.
 async fn broadcast_status(app_state: &Arc<AppState>, session: &UserSession, status: &str) {
     let status_msg = ServerMessage::StatusMessage {
         user_id: session.user_id,
@@ -263,13 +168,8 @@ async fn broadcast_status(app_state: &Arc<AppState>, session: &UserSession, stat
     };
     if let Ok(text) = serde_json::to_string(&status_msg) {
         let msg = Message::text(text);
-        
         let connections = app_state.active_connections.lock().await;
-
         for (other_session_key, tx) in connections.iter() {
-            // Send to all *other* sessions of *other* users, or other sessions of the same user.
-            // A status update (online/offline) should typically be seen by everyone.
-            // The logic here is to send to all connections EXCEPT the one that triggered the broadcast.
             if *other_session_key != session.session_key {
                 let _ = tx.send(msg.clone());
             }
@@ -277,55 +177,32 @@ async fn broadcast_status(app_state: &Arc<AppState>, session: &UserSession, stat
     }
 }
 
-
 // --- HTTP Handlers ---
 
-// Structs for strongly-typed request bodies.
 #[derive(Deserialize)]
-pub struct AuthPayload {
-    username: String,
-    password: String,
-}
+pub struct AuthPayload { username: String, password: String }
 
 #[derive(Deserialize)]
-pub struct AddContactPayload {
-    contact_username: String,
-}
+pub struct AddContactPayload { contact_username: String }
 
-// Struct for a consistent successful authentication response.
 #[derive(Serialize)]
 pub struct AuthResponse {
-    message: String,
-    session_key: String,
-    user_id: Uuid,
-    username: String,
+    pub message: String,
+    pub session_key: String,
+    pub user_id: Uuid,
+    pub username: String,
 }
 
-
-pub async fn register_handler(
-    payload: AuthPayload,
-    app_state: Arc<AppState>,
-) -> Result<impl Reply, Rejection> {
+pub async fn register_handler(payload: AuthPayload, app_state: Arc<AppState>) -> Result<impl Reply, Rejection> {
     if payload.username.is_empty() || payload.password.is_empty() {
-        return Err(warp::reject::custom(ErrorResponse {
-            message: "Username and password are required.".into(),
-        }));
+        return Err(warp::reject::custom(ErrorResponse { message: "Required fields missing.".into() }));
     }
-
     let mut users = app_state.users.lock().await;
     if users.contains_key(&payload.username) {
-        return Err(warp::reject::custom(ErrorResponse {
-            message: "Username already exists.".into(),
-        }));
+        return Err(warp::reject::custom(ErrorResponse { message: "User exists.".into() }));
     }
-
-    // Securely hash the password before storing.
-    let password_hash = match bcrypt::hash(&payload.password, bcrypt::DEFAULT_COST) {
-        Ok(hash) => hash,
-        Err(_) => return Err(warp::reject::custom(ErrorResponse {
-            message: "Failed to hash password.".into()
-        })),
-    };
+    let password_hash = bcrypt::hash(&payload.password, bcrypt::DEFAULT_COST)
+        .map_err(|_| warp::reject::custom(ErrorResponse { message: "Hash error.".into() }))?;
 
     let user = User {
         id: Uuid::new_v4(),
@@ -333,151 +210,75 @@ pub async fn register_handler(
         password_hash,
         contacts: Arc::new(Mutex::new(HashMap::new())),
     };
-
-    // Replace the end of the function with this:
-let response = create_session(&user, app_state.clone()).await;
-users.insert(payload.username.to_string(), user);
-Ok(warp::reply::json(&response)) // Note: AuthResponse is fine because it doesn't contain a Mutex
+    let response = create_session(&user, app_state.clone()).await;
+    users.insert(payload.username, user);
+    Ok(warp::reply::json(&response))
 }
 
-
-pub async fn login_handler(
-    payload: AuthPayload,
-    app_state: Arc<AppState>,
-) -> Result<impl Reply, Rejection> {
-     if payload.username.is_empty() || payload.password.is_empty() {
-        return Err(warp::reject::custom(ErrorResponse { message: "Username and password are required.".into() }));
-    }
-
+pub async fn login_handler(payload: AuthPayload, app_state: Arc<AppState>) -> Result<impl Reply, Rejection> {
     let users = app_state.users.lock().await;
-    match users.get(&payload.username) {
-        Some(user) => {
-            // Securely verify the password against the stored hash.
-            let is_valid = bcrypt::verify(&payload.password, &user.password_hash).unwrap_or(false);
-
-            if is_valid {
-                let response = create_session(user, app_state.clone()).await;
-                println!("Logged in user: {} ({})", payload.username, response.user_id); // Added log
-                Ok(warp::reply::json(&response))
-            } else {
-                Err(warp::reject::custom(ErrorResponse { message: "Invalid username or password.".into() }))
-            }
+    if let Some(user) = users.get(&payload.username) {
+        if bcrypt::verify(&payload.password, &user.password_hash).unwrap_or(false) {
+            let response = create_session(user, app_state.clone()).await;
+            return Ok(warp::reply::json(&response));
         }
-        None => Err(warp::reject::custom(ErrorResponse { message: "Invalid username or password.".into() })),
     }
+    Err(warp::reject::custom(ErrorResponse { message: "Invalid credentials.".into() }))
 }
 
-/// Helper function to create a new session for a user.
 async fn create_session(user: &User, app_state: Arc<AppState>) -> AuthResponse {
     let new_session_key = Uuid::new_v4().to_string();
-    
-    // --- Invalidate all old sessions and their WebSocket connections for this user_id ---
-    let mut user_sessions_guard = app_state.user_sessions.lock().await;
-    let mut active_connections_guard = app_state.active_connections.lock().await;
+    let mut sessions = app_state.user_sessions.lock().await;
+    let mut connections = app_state.active_connections.lock().await;
 
-    // Collect session keys to remove
-    let session_keys_to_remove: Vec<String> = user_sessions_guard
-        .iter()
-        .filter(|(_, session)| session.user_id == user.id)
-        .map(|(session_key, _)| session_key.clone())
-        .collect();
-
-    for old_session_key in session_keys_to_remove {
-        user_sessions_guard.remove(&old_session_key);
-        if active_connections_guard.remove(&old_session_key).is_some() {
-            println!("Closed old WebSocket connection for user {} (session: {})", user.username, old_session_key);
-        }
+    // Invalidate old sessions
+    let to_remove: Vec<_> = sessions.iter().filter(|(_, s)| s.user_id == user.id).map(|(k, _)| k.clone()).collect();
+    for key in to_remove {
+        sessions.remove(&key);
+        connections.remove(&key);
     }
-    // --- End Invalidation ---
 
-    let new_session = UserSession {
+    sessions.insert(new_session_key.clone(), UserSession {
         user_id: user.id,
         username: user.username.clone(),
         session_key: new_session_key.clone(),
-    };
-    user_sessions_guard.insert(new_session_key.clone(), new_session);
+    });
 
     AuthResponse {
-        message: "Authentication successful".to_string(),
+        message: "Success".into(),
         session_key: new_session_key,
         user_id: user.id,
         username: user.username.clone(),
     }
 }
 
-pub async fn add_contact_handler(
-    payload: AddContactPayload,
-    session: UserSession,
-    app_state: Arc<AppState>,
-) -> Result<impl Reply, Rejection> {
-    let contact_username = payload.contact_username;
-
-    if contact_username.is_empty() {
-        eprintln!("Add contact failed: contact_username is empty for user {}", session.username);
-        return Err(warp::reject::custom(ErrorResponse { message: "contact_username cannot be empty".to_string() }));
+pub async fn add_contact_handler(payload: AddContactPayload, session: UserSession, app_state: Arc<AppState>) -> Result<impl Reply, Rejection> {
+    if payload.contact_username == session.username {
+        return Err(warp::reject::custom(ErrorResponse { message: "Cannot add self.".into() }));
     }
-    
-    if contact_username == session.username {
-        eprintln!("Add contact failed: user {} tried to add themselves as a contact", session.username);
-        return Err(warp::reject::custom(ErrorResponse { message: "You cannot add yourself as a contact.".to_string() }));
+    let users = app_state.users.lock().await;
+    let current_user = users.get(&session.username).cloned();
+    let contact_user = users.get(&payload.contact_username).cloned();
+    drop(users);
+
+    if let (Some(u), Some(c)) = (current_user, contact_user) {
+        u.contacts.lock().await.insert(c.id, c.username.clone());
+        c.contacts.lock().await.insert(u.id, u.username.clone());
+        Ok(StatusCode::OK)
+    } else {
+        Err(warp::reject::custom(ErrorResponse { message: "User not found.".into() }))
     }
-
-    let users_guard = app_state.users.lock().await; // Acquire read lock once
-    
-    let current_user_opt = users_guard.get(&session.username).cloned();
-    let contact_to_add_opt = users_guard.get(&contact_username).cloned();
-
-    // Explicitly drop the guard to release the read lock on the main `users` HashMap.
-    drop(users_guard);
-
-    let current_user = match current_user_opt {
-        Some(u) => u,
-        None => {
-            eprintln!("Add contact failed: current user '{}' not found in users map (session might be invalid)", session.username);
-            return Err(warp::reject::custom(ErrorResponse { message: "User session invalid or user data missing.".to_string() }));
-        }
-    };
-
-    let contact_to_add = match contact_to_add_opt {
-        Some(c) => c,
-        None => {
-            eprintln!("Add contact failed: contact user '{}' not found for user {}", contact_username, session.username);
-            return Err(warp::reject::custom(ErrorResponse { message: "User not found".to_string() }));
-        }
-    };
-
-    // Now, acquire mutable locks on the individual `contacts` HashMaps.
-    let mut current_user_contacts = current_user.contacts.lock().await;
-    let mut contact_to_add_contacts = contact_to_add.contacts.lock().await;
-
-    // Add each user to the other's contact list for a mutual connection.
-    current_user_contacts.insert(contact_to_add.id, contact_to_add.username.clone());
-    contact_to_add_contacts.insert(current_user.id, current_user.username.clone());
-
-    println!("User '{}' (ID: {}) successfully added '{}' (ID: {}) as a contact.", 
-             session.username, session.user_id, contact_username, contact_to_add.id);
-    
-    // Debugging: Print current user's contacts after adding
-    println!("{}'s contacts after adding {}: {:?}", session.username, contact_username, current_user_contacts.keys().collect::<Vec<_>>());
-
-    Ok(StatusCode::OK)
 }
 
-pub async fn get_contacts_handler(
-    session: UserSession,
-    app_state: Arc<AppState>,
-) -> Result<impl Reply, Rejection> {
+pub async fn get_contacts_handler(session: UserSession, app_state: Arc<AppState>) -> Result<impl Reply, Rejection> {
     let users = app_state.users.lock().await;
     if let Some(user) = users.get(&session.username) {
         let contacts_map = user.contacts.lock().await;
-        
-        // Convert the internal HashMap data into a list of serializable DTOs
-        let contacts_list: Vec<UserDTO> = contacts_map.iter().map(|(id, username)| {
-            UserDTO { id: *id, username: username.clone() }
-        }).collect();
-
+        let contacts_list: Vec<UserDTO> = contacts_map.iter()
+            .map(|(id, name)| UserDTO { id: *id, username: name.clone() })
+            .collect();
         Ok(warp::reply::json(&contacts_list))
     } else {
-        Err(warp::reject::custom(ErrorResponse { message: "User not found".into() }))
+        Err(warp::reject::custom(ErrorResponse { message: "Not found.".into() }))
     }
 }
