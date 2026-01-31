@@ -75,7 +75,6 @@ async fn main() {
         .or(contacts_post_route)
         .or(contacts_get_route);
 
-    // DYNAMIC PORT: Railway sets the PORT env var. This is the key fix!
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "3030".to_string())
         .parse()
