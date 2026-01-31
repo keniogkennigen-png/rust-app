@@ -27,6 +27,36 @@ fn with_authenticated_session(
 }
 
 #[tokio::main]
+use warp::http::StatusCode;
+use std::convert::Infallible;
+// Add this to your imports at the top
+// use crate::ws_handlers::ErrorResponse; 
+
+async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
+    let code;
+    let message;
+
+    if err.is_not_found() {
+        code = StatusCode::NOT_FOUND;
+        message = "Route not found";
+    } else if let Some(e) = err.find::<ws_handlers::ErrorResponse>() {
+        code = StatusCode::BAD_REQUEST;
+        message = &e.message;
+    } else if let Some(_) = err.find::<ws_handlers::AuthError>() {
+        code = StatusCode::UNAUTHORIZED;
+        message = "Authentication failed";
+    } else {
+        eprintln!("unhandled rejection: {:?}", err);
+        code = StatusCode::INTERNAL_SERVER_ERROR;
+        message = "Internal Server Error";
+    }
+
+    let json = warp::reply::json(&ws_handlers::ErrorResponse {
+        message: message.into(),
+    });
+
+    Ok(warp::reply::with_status(json, code))
+}
 async fn main() {
     let app_state = Arc::new(AppState {
         users: Mutex::new(HashMap::new()),
