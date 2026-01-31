@@ -547,56 +547,41 @@
             input.dispatchEvent(new Event('input', { bubbles: true }));
         }
 
-        function connectWebSocket() {
-            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-            if (!currentUser || !currentUser.session_token) return;
+       function connectWebSocket(sessionKey) {
+    // This line detects if the page is HTTPS and switches to WSS automatically
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    
+    // Use the exact URL format the browser is demanding
+    const wsUrl = `${protocol}//${host}/chat/${sessionKey}`;
+    console.log("Attempting uplink to:", wsUrl);
 
-            const wsUrl = `ws://${window.location.host}/ws?token=${currentUser.session_token}`;
-            ws = new WebSocket(wsUrl);
+    socket = new WebSocket(wsUrl);
 
-            ws.onopen = () => {
-                console.log('WebSocket connection established.');
-                if (currentRecipient) enableChatInput(true);
-            };
+    socket.onopen = () => {
+        console.log("Uplink Established.");
+        updateStatus("ONLINE");
+    };
 
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                console.log("WS Received:", data);
-
-                switch(data.type) {
-                    case 'chatMessage':
-                        handleChatMessage(data);
-                        break;
-                    case 'statusMessage':
-                        handleStatusMessage(data);
-                        break;
-                    case 'typingIndicator':
-                        console.log("Received typing indicator:", data);
-                        handleTypingStatus(data);
-                        break;
-                    case 'readReceipt':
-                        console.log(`Transmission ${data.message_id} received by ${data.from_user_id}`);
-                        break;
-                }
-            };
-
-            ws.onclose = (event) => { 
-                console.log('WebSocket connection severed. Code:', event.code, 'Reason:', event.reason);
-                enableChatInput(false);
-                document.querySelectorAll('.status-indicator').forEach(el => el.classList.remove('online'));
-                if (currentUser) {
-                    appendMessage({ type: 'system', message: `Connection lost. Attempting to re-sync...` });
-                    setTimeout(connectWebSocket, 3000); 
-                } else {
-                    appendMessage({ type: 'system', message: 'Disconnected from grid.' });
-                }
-            };
-
-            ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-                showMessageBox('WebSocket connection matrix unstable.', true);
-            };
+    socket.onmessage = (event) => {
+        try {
+            const msg = JSON.parse(event.data);
+            displayMessage(msg);
+        } catch (e) {
+            console.error("Failed to parse transmission:", event.data);
         }
+    };
+
+    socket.onclose = (e) => {
+        console.log("Uplink lost:", e.code);
+        updateStatus("OFFLINE - Reconnecting...");
+        setTimeout(() => connectWebSocket(sessionKey), 3000);
+    };
+
+    socket.onerror = (error) => {
+        console.error("Transmission Error:", error);
+    };
+}
         
         function handleTypingStatus(data) {
             const typingStatusTextElement = typingIndicatorContainer.querySelector('#typingStatusText');
