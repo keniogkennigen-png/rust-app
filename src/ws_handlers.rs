@@ -27,6 +27,7 @@ pub struct AppState {
     // Now keyed by the unique session_key, allowing multiple connections per user.
     pub active_connections: Mutex<HashMap<String, mpsc::UnboundedSender<Message>>>,
 }
+
 #[derive(Serialize)]
 pub struct UserDTO {
     pub id: Uuid,
@@ -329,10 +330,10 @@ pub async fn register_handler(
         contacts: Arc::new(Mutex::new(HashMap::new())),
     };
 
-    let response = create_session(&user, app_state.clone()).await;
-    users.insert(payload.username.to_string(), user);
-    println!("Registered user: {} ({})", payload.username, response.user_id); // Added log
-    Ok(warp::reply::json(&response))
+    // Replace the end of the function with this:
+let response = create_session(&user, app_state.clone()).await;
+users.insert(payload.username.to_string(), user);
+Ok(warp::reply::json(&response)) // Note: AuthResponse is fine because it doesn't contain a Mutex
 }
 
 
