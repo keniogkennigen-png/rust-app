@@ -1,10 +1,37 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::convert::Infallible;
 use tokio::sync::Mutex;
-use warp::{Filter, Rejection, Reply};
-use crate::ws_handlers::{AppState, UserSession};
+use warp::{Filter, Rejection, Reply, http::StatusCode};
+use crate::ws_handlers::{AppState, UserSession, ErrorResponse};
 
 mod ws_handlers;
+
+// 1. REJECTION HANDLER (Fixes the "Non-JSON format" error on frontend)
+async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
+    let code;
+    let message;
+
+    if err.is_not_found() {
+        code = StatusCode::NOT_FOUND;
+        message = "Route not found";
+    } else if let Some(e) = err.find::<ErrorResponse>() {
+        code = StatusCode::BAD_REQUEST;
+        message = e.message.as_str();
+    } else if let Some(_) = err.find::<ws_handlers::AuthError>() {
+        code = StatusCode::UNAUTHORIZED;
+        message = "Authentication failed";
+    } else {
+        code = StatusCode::INTERNAL_SERVER_ERROR;
+        message = "Internal Server Error";
+    }
+
+    let json = warp::reply::json(&ErrorResponse {
+        message: message.into(),
+    });
+
+    Ok(warp::reply::with_status(json, code))
+}
 
 fn with_app_state(
     app_state: Arc<AppState>,
@@ -26,37 +53,8 @@ fn with_authenticated_session(
         })
 }
 
+// 2. THE MAIN ENGINE (Correctly marked with #[tokio::main])
 #[tokio::main]
-use warp::http::StatusCode;
-use std::convert::Infallible;
-// Add this to your imports at the top
-// use crate::ws_handlers::ErrorResponse; 
-
-async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
-    let code;
-    let message;
-
-    if err.is_not_found() {
-        code = StatusCode::NOT_FOUND;
-        message = "Route not found";
-    } else if let Some(e) = err.find::<ws_handlers::ErrorResponse>() {
-        code = StatusCode::BAD_REQUEST;
-        message = &e.message;
-    } else if let Some(_) = err.find::<ws_handlers::AuthError>() {
-        code = StatusCode::UNAUTHORIZED;
-        message = "Authentication failed";
-    } else {
-        eprintln!("unhandled rejection: {:?}", err);
-        code = StatusCode::INTERNAL_SERVER_ERROR;
-        message = "Internal Server Error";
-    }
-
-    let json = warp::reply::json(&ws_handlers::ErrorResponse {
-        message: message.into(),
-    });
-
-    Ok(warp::reply::with_status(json, code))
-}
 async fn main() {
     let app_state = Arc::new(AppState {
         users: Mutex::new(HashMap::new()),
@@ -103,14 +101,15 @@ async fn main() {
         .or(register_route)
         .or(login_route)
         .or(contacts_post_route)
-        .or(contacts_get_route);
+        .or(contacts_get_route)
+        .recover(handle_rejection);
 
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "3030".to_string())
         .parse()
         .expect("PORT must be a number");
 
-    println!("Starting chat server on 0.0.0.0:{}", port);
+    println!("Uplink active on 0.0.0.0:{}", port);
 
     warp::serve(routes)
         .run(([0, 0, 0, 0], port))
