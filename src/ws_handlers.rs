@@ -27,7 +27,11 @@ pub struct AppState {
     // Now keyed by the unique session_key, allowing multiple connections per user.
     pub active_connections: Mutex<HashMap<String, mpsc::UnboundedSender<Message>>>,
 }
-
+#[derive(Serialize)]
+pub struct UserDTO {
+    pub id: Uuid,
+    pub username: String,
+}
 /// Represents a registered user in the system.
 #[derive(Debug, Clone, Serialize)]
 pub struct User {
