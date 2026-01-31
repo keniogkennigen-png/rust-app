@@ -407,8 +407,8 @@ let currentSessionKey = null;
 
 // 1. LOGIN / REGISTER FUNCTION
 async function authenticate(type) {
-    const usernameEl = document.getElementById('username');
-    const passwordEl = document.getElementById('password');
+    const usernameEl = document.getElementById('authUsername');
+    const passwordEl = document.getElementById('authPassword');
 
     if (!usernameEl || !passwordEl) return;
 
