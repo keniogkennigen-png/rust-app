@@ -273,7 +273,7 @@
         function handleTypingStatus(data) {
             // Get references to the specific elements
             const typingStatusTextElement = typingIndicatorContainer.querySelector('#typingStatusText');
-            const typingBarElement = typingIndicatorContainer.querySelector('.typing-bar');
+            const typingBarElement = document.getElementById('typing-bar');
 
             // Only show typing indicator for the currently selected recipient
             if (currentRecipient && data.from_user_id === currentRecipient.id) {
