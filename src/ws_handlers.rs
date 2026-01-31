@@ -52,19 +52,26 @@ impl warp::reject::Reject for ErrorResponse {}
 
 // --- WebSocket Handlers ---
 
+// src/ws_handlers.rs - Update ONLY the chat_handler function
+
 pub async fn chat_handler(
     ws: warp::ws::Ws,
     session_key: String,
     app_state: Arc<AppState>,
 ) -> Result<impl Reply, Rejection> {
-    let sessions = app_state.user_sessions.lock().await;
-    if let Some(session) = sessions.get(&session_key).cloned() {
+    // 1. Scope the lock so it is dropped immediately after we get the session
+    let session = {
+        let sessions = app_state.user_sessions.lock().await;
+        sessions.get(&session_key).cloned()
+    }; // <--- Lock is dropped here automatically
+
+    if let Some(session) = session {
+        // Now app_state and session can be moved into the closure safely
         Ok(ws.on_upgrade(move |socket| handle_ws(socket, session, app_state)))
     } else {
         Err(warp::reject::custom(AuthError))
     }
 }
-
 async fn handle_ws(ws: WebSocket, session: UserSession, app_state: Arc<AppState>) {
     let (mut ws_sender, mut ws_receiver) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
