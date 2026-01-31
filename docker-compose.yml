@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  rust-chat:
+    build: .
+    container_name: rust_chat_app
+    ports:
+      - "3030:3030"
+    restart: unless-stopped
+    environment:
+      - RUST_LOG=info
+    volumes:
+      - app_data:/app/data
+
+volumes:
+  app_data:
